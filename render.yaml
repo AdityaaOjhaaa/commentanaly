@@ -9,7 +9,7 @@ services:
         value: 3.11.0
       - key: SECRET_KEY
         generateValue: true
-      - key: AIzaSyAAVGD1a6hn8X_SAokeVRzGQSjtW-1s18A
+      - key: YOUTUBE_API_KEY
         sync: false
-      - key: apify_api_tSneM2HbMF5AlhDwIDVOm9h875aiio1RxpRb
+      - key: APIFY_API_TOKEN
         sync: false 
