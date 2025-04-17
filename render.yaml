@@ -7,4 +7,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-        
+      - key: SECRET_KEY
+        generateValue: true
+      - key: AIzaSyAAVGD1a6hn8X_SAokeVRzGQSjtW-1s18A
+        sync: false
+      - key: apify_api_tSneM2HbMF5AlhDwIDVOm9h875aiio1RxpRb
+        sync: false 
