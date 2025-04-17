@@ -2,7 +2,7 @@ import os
 import re
 import pandas as pd
 import numpy as np
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, render_template_string
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, render_template_string, send_file
 import googleapiclient.discovery
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import plotly.graph_objects as go
@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 import traceback
 import sys
+from backup_utils import DatabaseBackup
 
 # Flask app configuration
 app = Flask(__name__)
@@ -26,14 +27,15 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
 
 # Database configuration
 if os.environ.get('RENDER'):
-    # Use Render's persistent storage when deployed
-    db_path = os.path.join('/data', 'users.db')
-    os.makedirs('/data', exist_ok=True)
+    # Use tmp directory when deployed on Render
+    db_path = os.path.join('/tmp', 'users.db')
 else:
     # Use local path for development
     db_path = 'users.db'
 
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+backup_manager = DatabaseBackup(db_path)
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
@@ -2530,6 +2532,9 @@ dashboard_template = """
                     </div>
                 </div>
                 <div class="nav-links">
+                    {% if is_admin %}
+                        <a href="{{ url_for('manage_backups') }}" class="btn">Manage Backups</a>
+                    {% endif %}
                     <a href="{{ url_for('analyze') }}" class="btn">New Analysis</a>
                     <a href="{{ url_for('logout') }}" class="btn logout-btn">Logout</a>
                 </div>
@@ -2757,6 +2762,9 @@ def dashboard():
     neutral_trends = [a.neutral_percent for a in reversed(analyses[-30:])]
     negative_trends = [a.negative_percent for a in reversed(analyses[-30:])]
     
+    # Check if user is admin
+    is_admin = current_user.email == 'admin@example.com'
+    
     return render_template_string(dashboard_template,
         total_analyses=total_analyses,
         youtube_analyses=youtube_analyses,
@@ -2766,7 +2774,8 @@ def dashboard():
         dates=dates,
         positive_trends=positive_trends,
         neutral_trends=neutral_trends,
-        negative_trends=negative_trends
+        negative_trends=negative_trends,
+        is_admin=is_admin
     )
 @app.route('/api/analyze', methods=['GET', 'POST'])
 @login_required
@@ -2842,6 +2851,10 @@ def init_db():
             db.create_all()
             print("Database tables created successfully", file=sys.stderr)
             
+            # Create initial backup after database creation
+            backup_manager.create_backup()
+            print("Initial backup created successfully", file=sys.stderr)
+            
             # Check if admin user exists
             admin = User.query.filter_by(email='admin@example.com').first()
             if not admin:
@@ -2852,8 +2865,243 @@ def init_db():
                 print("Admin user created successfully", file=sys.stderr)
         except Exception as e:
             print(f"Database initialization error: {str(e)}", file=sys.stderr)
-            print(traceback.format_exc(), file=sys.stderr)             
+            print(traceback.format_exc(), file=sys.stderr)
 
+# Add after your database configuration
+if os.environ.get('RENDER'):
+    # Use tmp directory when deployed on Render
+    db_path = os.path.join('/tmp', 'users.db')
+else:
+    # Use local path for development
+    db_path = 'users.db'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+backup_manager = DatabaseBackup(db_path)
+
+# Add these new routes at the end of your file
+@app.route('/admin/backups')
+@login_required
+def manage_backups():
+    """Admin page for managing database backups."""
+    if not current_user.email == 'admin@example.com':
+        flash('Access denied. Admin privileges required.')
+        return redirect(url_for('dashboard'))
+    
+    backups = backup_manager.list_backups()
+    return render_template_string("""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Backup Management - CommentAnaly</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Reuse your existing styles */
+        :root {
+            --primary-color: #ff6b6b;
+            --secondary-color: #4ecdc4;
+            --dark-color: #292f36;
+            --light-color: #f7fff7;
+            --accent-color: #ffe66d;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background-color: #f5f5f5;
+            color: var(--dark-color);
+            line-height: 1.6;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+        }
+        .header h1 {
+            margin-bottom: 0.5rem;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: var(--primary-color);
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            background-color: #ff5252;
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background-color: var(--secondary-color);
+        }
+        .btn-secondary:hover {
+            background-color: #43b5ae;
+        }
+        .backup-list {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .backup-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .backup-item:last-child {
+            border-bottom: none;
+        }
+        .backup-info {
+            flex-grow: 1;
+        }
+        .backup-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        .flash-message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .flash-message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>Database Backup Management</h1>
+            <p>Manage your database backups and restore points</p>
+        </div>
+    </div>
+    
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash-message {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <div style="margin-bottom: 20px">
+            <form action="{{ url_for('create_backup') }}" method="post" style="display: inline">
+                <button type="submit" class="btn">Create New Backup</button>
+            </form>
+            <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Back to Dashboard</a>
+        </div>
+        
+        <div class="backup-list">
+            <h2 style="margin-bottom: 20px">Available Backups</h2>
+            {% if backups %}
+                {% for backup in backups %}
+                    <div class="backup-item">
+                        <div class="backup-info">
+                            <strong>Backup from: {{ backup.timestamp }}</strong>
+                            <br>
+                            Size: {{ backup.size_mb }} MB
+                        </div>
+                        <div class="backup-actions">
+                            <form action="{{ url_for('restore_backup') }}" method="post" style="display: inline">
+                                <input type="hidden" name="backup_path" value="{{ backup.path }}">
+                                <button type="submit" class="btn btn-secondary" 
+                                        onclick="return confirm('Are you sure you want to restore this backup? Current data will be replaced.')">
+                                    Restore
+                                </button>
+                            </form>
+                            <form action="{{ url_for('download_backup') }}" method="post" style="display: inline">
+                                <input type="hidden" name="backup_path" value="{{ backup.path }}">
+                                <button type="submit" class="btn">Download</button>
+                            </form>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>No backups available.</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+    """, backups=backups)
+
+@app.route('/admin/backups/create', methods=['POST'])
+@login_required
+def create_backup():
+    """Create a new database backup."""
+    if not current_user.email == 'admin@example.com':
+        flash('Access denied. Admin privileges required.')
+        return redirect(url_for('dashboard'))
+    
+    if backup_manager.create_backup():
+        flash('Backup created successfully', 'success')
+    else:
+        flash('Failed to create backup', 'error')
+    
+    return redirect(url_for('manage_backups'))
+
+@app.route('/admin/backups/restore', methods=['POST'])
+@login_required
+def restore_backup():
+    """Restore database from a backup."""
+    if not current_user.email == 'admin@example.com':
+        flash('Access denied. Admin privileges required.')
+        return redirect(url_for('dashboard'))
+    
+    backup_path = request.form.get('backup_path')
+    if backup_manager.restore_backup(backup_path):
+        flash('Database restored successfully', 'success')
+    else:
+        flash('Failed to restore database', 'error')
+    
+    return redirect(url_for('manage_backups'))
+
+@app.route('/admin/backups/download', methods=['POST'])
+@login_required
+def download_backup():
+    """Download a backup file."""
+    if not current_user.email == 'admin@example.com':
+        flash('Access denied. Admin privileges required.')
+        return redirect(url_for('dashboard'))
+    
+    backup_path = request.form.get('backup_path')
+    if os.path.exists(backup_path):
+        return send_file(
+            backup_path,
+            as_attachment=True,
+            download_name=os.path.basename(backup_path)
+        )
+    else:
+        flash('Backup file not found', 'error')
+        return redirect(url_for('manage_backups'))
 
 # Modified main execution block for PythonAnywhere
 if __name__ == "__main__":
