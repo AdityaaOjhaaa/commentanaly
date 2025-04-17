@@ -17,11 +17,23 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from urllib.parse import urlparse
 from datetime import datetime
+import traceback
+import sys
 
 # Flask app configuration
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')  # Change this in production
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
+
+# Database configuration
+if os.environ.get('RENDER'):
+    # Use Render's persistent storage when deployed
+    db_path = os.path.join('/data', 'users.db')
+    os.makedirs('/data', exist_ok=True)
+else:
+    # Use local path for development
+    db_path = 'users.db'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
@@ -2685,22 +2697,29 @@ def signup():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    print("Login route accessed", file=sys.stderr)
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
         
     if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
-        user = User.query.filter_by(email=email).first()
-        
-        if user and user.check_password(password):
-            login_user(user)
-            next_page = request.args.get('next')
-            if not next_page or urlparse(next_page).netloc != '':
-                next_page = url_for('dashboard')
-            return redirect(next_page)
-        else:
-            flash('Invalid email or password')
+        try:
+            email = request.form.get('email')
+            password = request.form.get('password')
+            print(f"Login attempt for email: {email}", file=sys.stderr)
+            
+            user = User.query.filter_by(email=email).first()
+            if user and user.check_password(password):
+                login_user(user)
+                print(f"Login successful for user: {email}", file=sys.stderr)
+                return redirect(url_for('dashboard'))
+            else:
+                print(f"Login failed for user: {email}", file=sys.stderr)
+                flash('Invalid email or password')
+                return render_template_string(login_template)
+        except Exception as e:
+            print(f"Login error: {str(e)}", file=sys.stderr)
+            print(traceback.format_exc(), file=sys.stderr)
+            flash('An error occurred. Please try again.')
             return render_template_string(login_template)
     
     return render_template_string(login_template)
@@ -2815,27 +2834,48 @@ def api_analyze():
 
     except Exception as e:
         print(f"Analysis error: {str(e)}")  # Add this for debugging
-        return jsonify({"error": str(e)}), 500        
+        return jsonify({"error": str(e)}), 500   
+def init_db():
+    with app.app_context():
+        try:
+            # Create all tables
+            db.create_all()
+            print("Database tables created successfully", file=sys.stderr)
+            
+            # Check if admin user exists
+            admin = User.query.filter_by(email='admin@example.com').first()
+            if not admin:
+                admin = User(name='Admin', email='admin@example.com')
+                admin.set_password('admin-password-change-me')
+                db.session.add(admin)
+                db.session.commit()
+                print("Admin user created successfully", file=sys.stderr)
+        except Exception as e:
+            print(f"Database initialization error: {str(e)}", file=sys.stderr)
+            print(traceback.format_exc(), file=sys.stderr)             
 
 
 # Modified main execution block for PythonAnywhere
 if __name__ == "__main__":
+    # Initialize database
     with app.app_context():
-        db.create_all()
+        init_db()
         
-    # Check if admin user exists, if not create one
-    with app.app_context():
+        # Check if admin user exists
         admin = User.query.filter_by(email='admin@example.com').first()
         if not admin:
             admin = User(name='Admin', email='admin@example.com')
-            admin.set_password('admin-password-change-me')  # Change this!
+            admin.set_password('admin-password-change-me')
             db.session.add(admin)
             db.session.commit()
     
-    # Initialize the transformer model
+    # Initialize transformer model
     print("Initializing the transformer model...")
     transformer_tokenizer, transformer_model = initialize_transformer_model()
     print("Transformer model initialized successfully!")
     
+    # Get port from environment variable or use default
+    port = int(os.environ.get('PORT', 10000))
+    
     # Run the Flask app
-    app.run(debug=False) 
+    app.run(host='0.0.0.0', port=port) 
